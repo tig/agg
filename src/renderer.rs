@@ -4,7 +4,7 @@ mod swash;
 use imgref::ImgVec;
 use rgb::{RGB8, RGBA8};
 
-use crate::terminal::Snapshot;
+use crate::terminal::{Image, Snapshot};
 use crate::theme::Theme;
 
 pub trait Renderer {
@@ -85,6 +85,76 @@ fn color_to_rgb(c: &avt::Color, theme: &Theme) -> RGB8 {
         avt::Color::RGB(c) => *c,
         avt::Color::Indexed(c) => theme.color(*c),
     }
+}
+
+/// Pixel geometry shared by both renderers: the frame's left/top padding and
+/// the per-cell pixel size, used to place a cell-anchored image.
+pub(crate) struct Layout {
+    pub margin_l: f64,
+    pub margin_t: f64,
+    pub cell_width: f64,
+    pub cell_height: f64,
+}
+
+/// Composite sixel images over an already-rendered text frame. Each image is
+/// drawn at native pixel resolution with its top-left at the pixel origin of
+/// its anchor cell. Pixels outside the frame are clipped.
+fn composite_images(
+    buf: &mut [RGBA8],
+    buf_width: usize,
+    buf_height: usize,
+    images: &[Image],
+    layout: Layout,
+) {
+    for image in images {
+        let origin_x = (layout.margin_l + image.col as f64 * layout.cell_width).round() as i64;
+        let origin_y = (layout.margin_t + image.row as f64 * layout.cell_height).round() as i64;
+        let data = &image.data;
+
+        for iy in 0..data.height {
+            let y = origin_y + iy as i64;
+
+            if y < 0 || y as usize >= buf_height {
+                continue;
+            }
+
+            let row_start = y as usize * buf_width;
+
+            for ix in 0..data.width {
+                let x = origin_x + ix as i64;
+
+                if x < 0 || x as usize >= buf_width {
+                    continue;
+                }
+
+                let src = data.pixels[iy * data.width + ix];
+
+                if src.a == 0 {
+                    continue;
+                }
+
+                let idx = row_start + x as usize;
+                buf[idx] = blend_over(src, buf[idx]);
+            }
+        }
+    }
+}
+
+/// Source-over compositing of an image pixel onto an opaque destination.
+fn blend_over(src: RGBA8, dst: RGBA8) -> RGBA8 {
+    if src.a == 255 {
+        return src;
+    }
+
+    let a = src.a as u16;
+    let inv = 255 - a;
+
+    RGBA8::new(
+        ((src.r as u16 * a + dst.r as u16 * inv) / 255) as u8,
+        ((src.g as u16 * a + dst.g as u16 * inv) / 255) as u8,
+        ((src.b as u16 * a + dst.b as u16 * inv) / 255) as u8,
+        255,
+    )
 }
 
 #[cfg(test)]
@@ -837,12 +907,87 @@ mod tests {
         assert_color_emoji_rendered(&image, 0, 0, 2);
     }
 
+    #[test]
+    fn resvg_composites_sixel_over_text() {
+        composites_sixel_over_text(&mut resvg(settings(false)));
+    }
+
+    #[test]
+    fn swash_composites_sixel_over_text() {
+        composites_sixel_over_text(&mut swash(settings(false)));
+    }
+
+    #[test]
+    fn resvg_skips_transparent_sixel_pixels() {
+        skips_transparent_sixel_pixels(&mut resvg(settings(false)));
+    }
+
+    #[test]
+    fn swash_skips_transparent_sixel_pixels() {
+        skips_transparent_sixel_pixels(&mut swash(settings(false)));
+    }
+
+    // A solid block anchored at cell (0,0), large enough to cover the first
+    // few cells, must paint its color over whatever text sits beneath it,
+    // while cells beyond its extent stay background.
+    fn composites_sixel_over_text<R: Renderer>(renderer: &mut R) {
+        let red = RGBA8::new(255, 0, 0, 255);
+        let data = std::sync::Arc::new(crate::sixel::Image {
+            width: 60,
+            height: 60,
+            pixels: vec![red; 60 * 60],
+        });
+
+        let snapshot = Snapshot {
+            lines: lines_for("hello"),
+            cursor: None,
+            images: vec![Image {
+                col: 0,
+                row: 0,
+                data,
+            }],
+        };
+
+        let image = renderer.render(&snapshot);
+
+        assert_rgb_close(cell_center(&image, 0, 0), RGB8::new(255, 0, 0), 2);
+        assert_rgb_close(cell_center(&image, 30, 0), BG, 2);
+    }
+
+    // Fully transparent image pixels must leave the frame untouched.
+    fn skips_transparent_sixel_pixels<R: Renderer>(renderer: &mut R) {
+        let clear = RGBA8::new(255, 0, 0, 0);
+        let data = std::sync::Arc::new(crate::sixel::Image {
+            width: 60,
+            height: 60,
+            pixels: vec![clear; 60 * 60],
+        });
+
+        let snapshot = Snapshot {
+            lines: lines_for(""),
+            cursor: None,
+            images: vec![Image {
+                col: 0,
+                row: 0,
+                data,
+            }],
+        };
+
+        let image = renderer.render(&snapshot);
+
+        assert_rgb_close(cell_center(&image, 0, 0), BG, 2);
+    }
+
     fn render<R: Renderer>(
         renderer: &mut R,
         lines: Vec<avt::Line>,
         cursor: Option<(usize, usize)>,
     ) -> ImgVec<RGBA8> {
-        renderer.render(&Snapshot { lines, cursor })
+        renderer.render(&Snapshot {
+            lines,
+            cursor,
+            images: Vec::new(),
+        })
     }
 
     fn settings(bold_is_bright: bool) -> Settings {

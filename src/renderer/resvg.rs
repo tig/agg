@@ -401,7 +401,24 @@ impl<'a> Renderer for ResvgRenderer<'a> {
             tiny_skia::Pixmap::new(self.pixel_width as u32, self.pixel_height as u32).unwrap();
 
         resvg::render(&tree, self.transform, &mut pixmap.as_mut());
-        let buf = pixmap.take().as_rgba().to_vec();
+        let mut buf = pixmap.take().as_rgba().to_vec();
+
+        let (cols, rows) = self.terminal_size;
+        let cell_width = self.pixel_width as f64 / (cols + 2) as f64;
+        let cell_height = self.pixel_height as f64 / (rows + 1) as f64;
+
+        super::composite_images(
+            &mut buf,
+            self.pixel_width,
+            self.pixel_height,
+            &snapshot.images,
+            super::Layout {
+                margin_l: cell_width,
+                margin_t: cell_height / 2.0,
+                cell_width,
+                cell_height,
+            },
+        );
 
         ImgVec::new(buf, self.pixel_width, self.pixel_height)
     }

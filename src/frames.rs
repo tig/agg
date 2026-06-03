@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use crate::asciicast::Event;
-use crate::terminal::{self, Snapshot};
+use crate::terminal::{self, Snapshot, Terminal};
 
 /// A terminal state at a point in time. Holds terminal cells, not rendered
 /// pixels.
@@ -18,10 +18,10 @@ pub struct Frame {
 }
 
 impl Frame {
-    fn from_vt(time: f64, vt: &avt::Vt) -> Frame {
+    fn from_terminal(time: f64, terminal: &Terminal) -> Frame {
         Frame {
             time,
-            snapshot: Snapshot::from_vt(vt),
+            snapshot: terminal.snapshot(),
         }
     }
 
@@ -46,10 +46,10 @@ pub fn from_range<'a>(
     start: Option<f64>,
     end: Option<f64>,
 ) -> impl Iterator<Item = Frame> + 'a {
-    let vt = terminal::build(terminal_size);
-    let blank = Frame::from_vt(0.0, &vt);
+    let terminal = terminal::build(terminal_size);
+    let blank = Frame::from_terminal(0.0, &terminal);
 
-    generate_with(vt, events, RangeEmitter::new(start, end, blank))
+    generate_with(terminal, events, RangeEmitter::new(start, end, blank))
 }
 
 /// Generate terminal states at each resolved timestamp, using player seek
@@ -59,17 +59,17 @@ pub fn at_positions<'a>(
     terminal_size: (usize, usize),
     positions: Vec<f64>,
 ) -> impl Iterator<Item = Frame> + 'a {
-    let vt = terminal::build(terminal_size);
-    let blank = Frame::from_vt(0.0, &vt);
+    let terminal = terminal::build(terminal_size);
+    let blank = Frame::from_terminal(0.0, &terminal);
 
-    generate_with(vt, events, PositionEmitter::new(positions, blank))
+    generate_with(terminal, events, PositionEmitter::new(positions, blank))
 }
 
 /// Replay the timeline through `vt`, feeding the emitter one candidate frame
 /// per event. Only output events mutate the terminal; marker and `Other` events
 /// still produce a candidate frame so the emitter can detect crossings.
 fn generate_with<'a, E: FrameEmitter + 'a>(
-    mut vt: avt::Vt,
+    mut terminal: Terminal,
     events: &'a [Event],
     mut emitter: E,
 ) -> impl Iterator<Item = Frame> + 'a {
@@ -94,10 +94,10 @@ fn generate_with<'a, E: FrameEmitter + 'a>(
 
             Some(event) => {
                 if let Event::Output { data, .. } = event {
-                    terminal::feed_str(&mut vt, data);
+                    terminal.feed_str(data);
                 }
 
-                let frame = Frame::from_vt(event.time(), &vt);
+                let frame = Frame::from_terminal(event.time(), &terminal);
                 pending.extend(emitter.emit(frame, event));
             }
         }
