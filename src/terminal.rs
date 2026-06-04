@@ -40,6 +40,10 @@ pub struct Terminal {
     vt: Vt,
     images: Vec<Image>,
     pending: Option<Pending>,
+    /// A lone `ESC` left at the end of the previous feed, withheld so a DCS
+    /// introducer (`ESC P`) or terminator (`ESC \`) split across output events
+    /// is still recognized when the next feed supplies the second byte.
+    trailing_esc: bool,
 }
 
 pub fn build(terminal_size: (usize, usize)) -> Terminal {
@@ -57,6 +61,7 @@ impl Terminal {
             vt,
             images: Vec::new(),
             pending: None,
+            trailing_esc: false,
         }
     }
 
@@ -67,6 +72,25 @@ impl Terminal {
     /// stream is walked in order so screen clears and images interleave
     /// correctly.
     pub fn feed_str(&mut self, data: &str) {
+        // Reattach an `ESC` carried over from the previous feed so a two-byte
+        // DCS introducer/terminator split at the event boundary is seen whole.
+        let reattached;
+        let mut data = data;
+
+        if self.trailing_esc {
+            self.trailing_esc = false;
+            reattached = format!("\u{1b}{data}");
+            data = &reattached;
+        }
+
+        // A lone trailing `ESC` can only be completed by the next feed, so hold
+        // it back from both avt and the scanner until then. Reattaching it
+        // above restores the exact byte order avt sees.
+        if let Some(stripped) = data.strip_suffix('\u{1b}') {
+            self.trailing_esc = true;
+            data = stripped;
+        }
+
         let mut rest = data;
 
         loop {
@@ -243,6 +267,36 @@ mod tests {
 
         let snapshot = term.snapshot();
         assert_eq!(snapshot.images.len(), 1);
+        assert_eq!(snapshot.images[0].data.pixels[0], red());
+    }
+
+    #[test]
+    fn reassembles_a_sixel_split_at_the_st_terminator() {
+        // The ST terminator `ESC \` is split across events: the `ESC` ends one
+        // chunk, the `\` begins the next.
+        let mut term = Terminal::new(SIZE);
+        term.feed_str("\u{1b}Pq#0;2;100;0;0~\u{1b}");
+        assert!(term.snapshot().images.is_empty());
+
+        term.feed_str("\\");
+
+        let snapshot = term.snapshot();
+        assert_eq!(snapshot.images.len(), 1);
+        assert_eq!(snapshot.images[0].data.pixels[0], red());
+    }
+
+    #[test]
+    fn detects_a_sixel_introducer_split_across_feeds() {
+        // The `ESC P` introducer is split across events: the `ESC` ends one
+        // chunk, the `P` begins the next.
+        let mut term = Terminal::new(SIZE);
+        term.feed_str("ab\u{1b}");
+        term.feed_str("Pq#0;2;100;0;0~\u{1b}\\");
+
+        let snapshot = term.snapshot();
+        assert_eq!(snapshot.images.len(), 1);
+        // The cursor sat at column 2 (after "ab") when the DCS arrived.
+        assert_eq!((snapshot.images[0].col, snapshot.images[0].row), (2, 0));
         assert_eq!(snapshot.images[0].data.pixels[0], red());
     }
 
