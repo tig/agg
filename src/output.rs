@@ -87,6 +87,7 @@ mod tests {
             snapshot: Snapshot {
                 lines: Vec::new(),
                 cursor: Some((tag, 0)),
+                images: Vec::new(),
             },
         }
     }

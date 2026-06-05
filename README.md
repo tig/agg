@@ -35,6 +35,8 @@ Notable features:
   system locations,
 - color emoji rendering with support for Apple Color Emoji, Noto Color Emoji,
   and other common emoji fonts,
+- sixel graphics rendering, compositing images embedded in the recording as
+  sixel DCS sequences over the terminal text,
 - two selectable rendering backends: `swash` (default) and `resvg`,
 - adjustable playback speed,
 - idle time limiting to skip periods of inactivity,

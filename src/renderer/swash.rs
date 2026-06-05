@@ -1293,6 +1293,19 @@ impl Renderer for SwashRenderer {
             }
         }
 
+        super::composite_images(
+            &mut buf,
+            self.pixel_width,
+            self.pixel_height,
+            &snapshot.images,
+            super::Layout {
+                margin_l,
+                margin_t: margin_t as f64,
+                cell_width: self.col_width,
+                cell_height: self.row_height,
+            },
+        );
+
         ImgVec::new(buf, self.pixel_width, self.pixel_height)
     }
 
