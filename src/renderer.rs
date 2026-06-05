@@ -4,7 +4,9 @@ mod swash;
 use imgref::ImgVec;
 use rgb::{RGB8, RGBA8};
 
-use crate::terminal::{Image, Snapshot};
+use avt::Image;
+
+use crate::terminal::Snapshot;
 use crate::theme::Theme;
 
 pub trait Renderer {
@@ -109,9 +111,10 @@ fn composite_images(
     for image in images {
         let origin_x = (layout.margin_l + image.col as f64 * layout.cell_width).round() as i64;
         let origin_y = (layout.margin_t + image.row as f64 * layout.cell_height).round() as i64;
-        let data = &image.data;
+        let width = image.width();
+        let pixels = image.pixels();
 
-        for iy in 0..data.height {
+        for iy in 0..image.height() {
             let y = origin_y + iy as i64;
 
             if y < 0 || y as usize >= buf_height {
@@ -120,14 +123,14 @@ fn composite_images(
 
             let row_start = y as usize * buf_width;
 
-            for ix in 0..data.width {
+            for ix in 0..width {
                 let x = origin_x + ix as i64;
 
                 if x < 0 || x as usize >= buf_width {
                     continue;
                 }
 
-                let src = data.pixels[iy * data.width + ix];
+                let src = pixels[iy * width + ix];
 
                 if src.a == 0 {
                     continue;
@@ -932,20 +935,11 @@ mod tests {
     // while cells beyond its extent stay background.
     fn composites_sixel_over_text<R: Renderer>(renderer: &mut R) {
         let red = RGBA8::new(255, 0, 0, 255);
-        let data = std::sync::Arc::new(crate::sixel::Image {
-            width: 60,
-            height: 60,
-            pixels: vec![red; 60 * 60],
-        });
 
         let snapshot = Snapshot {
             lines: lines_for("hello"),
             cursor: None,
-            images: vec![Image {
-                col: 0,
-                row: 0,
-                data,
-            }],
+            images: vec![Image::new(0, 0, 60, 60, vec![red; 60 * 60])],
         };
 
         let image = renderer.render(&snapshot);
@@ -957,20 +951,11 @@ mod tests {
     // Fully transparent image pixels must leave the frame untouched.
     fn skips_transparent_sixel_pixels<R: Renderer>(renderer: &mut R) {
         let clear = RGBA8::new(255, 0, 0, 0);
-        let data = std::sync::Arc::new(crate::sixel::Image {
-            width: 60,
-            height: 60,
-            pixels: vec![clear; 60 * 60],
-        });
 
         let snapshot = Snapshot {
             lines: lines_for(""),
             cursor: None,
-            images: vec![Image {
-                col: 0,
-                row: 0,
-                data,
-            }],
+            images: vec![Image::new(0, 0, 60, 60, vec![clear; 60 * 60])],
         };
 
         let image = renderer.render(&snapshot);

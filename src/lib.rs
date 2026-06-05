@@ -4,7 +4,6 @@ mod frames;
 mod output;
 mod renderer;
 mod selection;
-mod sixel;
 mod terminal;
 mod theme;
 mod timeline;
