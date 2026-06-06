@@ -1313,6 +1313,13 @@ impl Renderer for SwashRenderer {
     fn pixel_size(&self) -> (usize, usize) {
         (self.pixel_width, self.pixel_height)
     }
+
+    fn cell_size(&self) -> (usize, usize) {
+        (
+            self.col_width.round() as usize,
+            self.row_height.round() as usize,
+        )
+    }
 }
 
 #[cfg(test)]

@@ -12,6 +12,9 @@ use crate::theme::Theme;
 pub trait Renderer {
     fn render(&mut self, snapshot: &Snapshot) -> ImgVec<RGBA8>;
     fn pixel_size(&self) -> (usize, usize);
+    /// The cell size in pixels (width, height), rounded to whole pixels. Used to
+    /// tell the terminal how big a cell is so it can track image occlusion.
+    fn cell_size(&self) -> (usize, usize);
 }
 
 pub struct Settings {
@@ -120,14 +123,9 @@ fn composite_images(
     lines: &[avt::Line],
     layout: Layout,
 ) {
-    // The backdrop is the dominant background across every image's footprint.
-    // Sharing one backdrop across all images (rather than sampling each image's
-    // own footprint) keeps occlusion consistent when an app emits several
-    // overlapping sixel tiles for one surface (e.g. winprint's partial preview
-    // re-renders): a tile that happens to sit mostly under a dialog would
-    // otherwise treat the dialog's background as its own and let the image show
-    // through. The combined footprint is dominated by the real backdrop, so the
-    // overlay's cells occlude every tile.
+    // Heuristic backdrop, used only for images that carry no avt occlusion
+    // (e.g. externally constructed images). Terminal-produced images bring an
+    // exact per-cell occlusion mask from avt, which is preferred.
     let backdrop = shared_backdrop(images, lines, layout);
 
     for image in images {
@@ -136,7 +134,21 @@ fn composite_images(
         let width = image.width();
         let pixels = image.pixels();
 
-        let occlusion = OcclusionMask::build(image, width, lines, layout, backdrop);
+        // avt tracks occlusion when it knows the cell size (image.cols() > 0).
+        // Then map pixels to footprint cells with the same rounded cell metric
+        // avt used; otherwise fall back to the snapshot heuristic over the
+        // layout metric.
+        let avt_tracked = image.cols() > 0;
+        let heuristic =
+            (!avt_tracked).then(|| OcclusionMask::build(image, width, lines, layout, backdrop));
+        let (cell_w, cell_h) = if avt_tracked {
+            (
+                layout.cell_width.round().max(1.0),
+                layout.cell_height.round().max(1.0),
+            )
+        } else {
+            (layout.cell_width, layout.cell_height)
+        };
 
         for iy in 0..image.height() {
             let y = origin_y + iy as i64;
@@ -146,7 +158,7 @@ fn composite_images(
             }
 
             let row_start = y as usize * buf_width;
-            let cell_row = (iy as f64 / layout.cell_height) as usize;
+            let cell_row = (iy as f64 / cell_h) as usize;
 
             for ix in 0..width {
                 let x = origin_x + ix as i64;
@@ -155,8 +167,12 @@ fn composite_images(
                     continue;
                 }
 
-                let cell_col = (ix as f64 / layout.cell_width) as usize;
-                if occlusion.occluded(cell_row, cell_col) {
+                let cell_col = (ix as f64 / cell_w) as usize;
+                let occluded = match &heuristic {
+                    Some(mask) => mask.occluded(cell_row, cell_col),
+                    None => image.is_occluded(cell_col, cell_row),
+                };
+                if occluded {
                     continue;
                 }
 
@@ -226,11 +242,7 @@ impl OcclusionMask {
 
 /// The dominant background across every image's combined cell footprint, used
 /// as the shared backdrop all images are occluded against.
-fn shared_backdrop(
-    images: &[Image],
-    lines: &[avt::Line],
-    layout: Layout,
-) -> Option<avt::Color> {
+fn shared_backdrop(images: &[Image], lines: &[avt::Line], layout: Layout) -> Option<avt::Color> {
     let mut backgrounds = Vec::new();
 
     for image in images {

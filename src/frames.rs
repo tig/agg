@@ -43,10 +43,11 @@ trait FrameEmitter {
 pub fn from_range<'a>(
     events: &'a [Event],
     terminal_size: (usize, usize),
+    cell_size: (usize, usize),
     start: Option<f64>,
     end: Option<f64>,
 ) -> impl Iterator<Item = Frame> + 'a {
-    let terminal = terminal::build(terminal_size);
+    let terminal = terminal::build(terminal_size, cell_size);
     let blank = Frame::from_terminal(0.0, &terminal);
 
     generate_with(terminal, events, RangeEmitter::new(start, end, blank))
@@ -57,9 +58,10 @@ pub fn from_range<'a>(
 pub fn at_positions<'a>(
     events: &'a [Event],
     terminal_size: (usize, usize),
+    cell_size: (usize, usize),
     positions: Vec<f64>,
 ) -> impl Iterator<Item = Frame> + 'a {
-    let terminal = terminal::build(terminal_size);
+    let terminal = terminal::build(terminal_size, cell_size);
     let blank = Frame::from_terminal(0.0, &terminal);
 
     generate_with(terminal, events, PositionEmitter::new(positions, blank))
@@ -248,11 +250,11 @@ mod tests {
         start: Option<f64>,
         end: Option<f64>,
     ) -> Vec<Frame> {
-        super::from_range(events, size, start, end).collect()
+        super::from_range(events, size, (10, 20), start, end).collect()
     }
 
     fn at_positions(events: &[Event], size: (usize, usize), positions: Vec<f64>) -> Vec<Frame> {
-        super::at_positions(events, size, positions).collect()
+        super::at_positions(events, size, (10, 20), positions).collect()
     }
 
     #[test]

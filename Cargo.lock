@@ -136,7 +136,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "avt"
 version = "0.18.0"
-source = "git+https://github.com/tig/avt?rev=1986a8391fdd78fd0858000bf3a8e2206602fbe2#1986a8391fdd78fd0858000bf3a8e2206602fbe2"
+source = "git+https://github.com/tig/avt?rev=87036d1a82688942c80201a3be2102b7851fe0cb#87036d1a82688942c80201a3be2102b7851fe0cb"
 dependencies = [
  "rgb",
  "unicode-width",
