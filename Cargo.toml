@@ -25,7 +25,9 @@ rust-version = "1.85.0"
 
 [dependencies]
 anyhow = "1.0.102"
-avt = "0.18.0"
+# Sixel-capable fork of asciinema/avt: exposes vt.images() so agg reads decoded
+# sixel from the terminal instead of re-parsing the byte stream.
+avt = { git = "https://github.com/tig/avt", rev = "1986a8391fdd78fd0858000bf3a8e2206602fbe2" }
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.10"
 fontdb = "0.23.0"
