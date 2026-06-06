@@ -412,6 +412,7 @@ impl<'a> Renderer for ResvgRenderer<'a> {
             self.pixel_width,
             self.pixel_height,
             &snapshot.images,
+            &snapshot.lines,
             super::Layout {
                 margin_l: cell_width,
                 margin_t: cell_height / 2.0,

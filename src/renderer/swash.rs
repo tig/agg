@@ -1298,6 +1298,7 @@ impl Renderer for SwashRenderer {
             self.pixel_width,
             self.pixel_height,
             &snapshot.images,
+            &snapshot.lines,
             super::Layout {
                 margin_l,
                 margin_t: margin_t as f64,

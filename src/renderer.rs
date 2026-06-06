@@ -91,6 +91,7 @@ fn color_to_rgb(c: &avt::Color, theme: &Theme) -> RGB8 {
 
 /// Pixel geometry shared by both renderers: the frame's left/top padding and
 /// the per-cell pixel size, used to place a cell-anchored image.
+#[derive(Clone, Copy)]
 pub(crate) struct Layout {
     pub margin_l: f64,
     pub margin_t: f64,
@@ -101,11 +102,22 @@ pub(crate) struct Layout {
 /// Composite sixel images over an already-rendered text frame. Each image is
 /// drawn at native pixel resolution with its top-left at the pixel origin of
 /// its anchor cell. Pixels outside the frame are clipped.
+///
+/// Cells drawn over the image after it was placed (e.g. a dialog opened over a
+/// sixel preview) must occlude it, the way text overwrites sixel pixels in a
+/// real terminal. The snapshot is a final state with no draw-order info, so we
+/// approximate "has content drawn into it" per cell: a cell occludes the image
+/// when it carries a glyph, or when its background differs from the image's
+/// anchor (top-left) cell. Sixel image views leave their own cells blank
+/// (spaces on the backdrop background), so the image shows through them, while
+/// a dialog or panel drawn over the image (its glyphs and/or its own
+/// background) hides it.
 fn composite_images(
     buf: &mut [RGBA8],
     buf_width: usize,
     buf_height: usize,
     images: &[Image],
+    lines: &[avt::Line],
     layout: Layout,
 ) {
     for image in images {
@@ -113,6 +125,8 @@ fn composite_images(
         let origin_y = (layout.margin_t + image.row as f64 * layout.cell_height).round() as i64;
         let width = image.width();
         let pixels = image.pixels();
+
+        let occlusion = OcclusionMask::build(image, width, lines, layout);
 
         for iy in 0..image.height() {
             let y = origin_y + iy as i64;
@@ -122,11 +136,17 @@ fn composite_images(
             }
 
             let row_start = y as usize * buf_width;
+            let cell_row = (iy as f64 / layout.cell_height) as usize;
 
             for ix in 0..width {
                 let x = origin_x + ix as i64;
 
                 if x < 0 || x as usize >= buf_width {
+                    continue;
+                }
+
+                let cell_col = (ix as f64 / layout.cell_width) as usize;
+                if occlusion.occluded(cell_row, cell_col) {
                     continue;
                 }
 
@@ -141,6 +161,68 @@ fn composite_images(
             }
         }
     }
+}
+
+/// Per-cell occlusion over an image's cell footprint: which cells of the grid
+/// (relative to the image's anchor) hold content that should hide the image.
+struct OcclusionMask {
+    cols: usize,
+    rows: usize,
+    cells: Vec<bool>,
+}
+
+impl OcclusionMask {
+    fn build(image: &Image, width: usize, lines: &[avt::Line], layout: Layout) -> Self {
+        let cols = (width as f64 / layout.cell_width).ceil() as usize;
+        let rows = (image.height() as f64 / layout.cell_height).ceil() as usize;
+        let mut cells = vec![false; cols * rows];
+
+        // The image's backdrop background, sampled at its anchor cell. Cells
+        // whose background matches this (and that carry no glyph) are treated
+        // as backdrop and let the image through.
+        let backdrop = cell_background(lines, image.row, image.col);
+
+        for dr in 0..rows {
+            let Some(line) = lines.get(image.row + dr) else {
+                continue;
+            };
+
+            let mut col = 0usize;
+            for cell in line.cells() {
+                let cell_w = cell.width() as usize;
+                let occluded = cell.char() != ' ' || cell.pen().background() != backdrop;
+                if occluded {
+                    for c in col..col + cell_w {
+                        if c >= image.col && c < image.col + cols {
+                            cells[dr * cols + (c - image.col)] = true;
+                        }
+                    }
+                }
+                col += cell_w;
+            }
+        }
+
+        OcclusionMask { cols, rows, cells }
+    }
+
+    fn occluded(&self, row: usize, col: usize) -> bool {
+        row < self.rows && col < self.cols && self.cells[row * self.cols + col]
+    }
+}
+
+/// The background of the cell at `(row, col)`, or `None` if out of range or
+/// using the default background.
+fn cell_background(lines: &[avt::Line], row: usize, col: usize) -> Option<avt::Color> {
+    let line = lines.get(row)?;
+    let mut c = 0usize;
+    for cell in line.cells() {
+        let cell_w = cell.width() as usize;
+        if col < c + cell_w {
+            return cell.pen().background();
+        }
+        c += cell_w;
+    }
+    None
 }
 
 /// Source-over compositing of an image pixel onto an opaque destination.
@@ -911,13 +993,13 @@ mod tests {
     }
 
     #[test]
-    fn resvg_composites_sixel_over_text() {
-        composites_sixel_over_text(&mut resvg(settings(false)));
+    fn resvg_composites_sixel_over_blank_cells() {
+        composites_sixel_over_blank_cells(&mut resvg(settings(false)));
     }
 
     #[test]
-    fn swash_composites_sixel_over_text() {
-        composites_sixel_over_text(&mut swash(settings(false)));
+    fn swash_composites_sixel_over_blank_cells() {
+        composites_sixel_over_blank_cells(&mut swash(settings(false)));
     }
 
     #[test]
@@ -931,13 +1013,13 @@ mod tests {
     }
 
     // A solid block anchored at cell (0,0), large enough to cover the first
-    // few cells, must paint its color over whatever text sits beneath it,
+    // few cells, paints its color over the blank backdrop cells it sits on,
     // while cells beyond its extent stay background.
-    fn composites_sixel_over_text<R: Renderer>(renderer: &mut R) {
+    fn composites_sixel_over_blank_cells<R: Renderer>(renderer: &mut R) {
         let red = RGBA8::new(255, 0, 0, 255);
 
         let snapshot = Snapshot {
-            lines: lines_for("hello"),
+            lines: lines_for(""),
             cursor: None,
             images: vec![Image::new(0, 0, 60, 60, vec![red; 60 * 60])],
         };
@@ -961,6 +1043,42 @@ mod tests {
         let image = renderer.render(&snapshot);
 
         assert_rgb_close(cell_center(&image, 0, 0), BG, 2);
+    }
+
+    #[test]
+    fn composite_images_occludes_cells_with_a_foreign_background() {
+        // 20x10 px buffer = two 10x10 cells in one row. The image covers both.
+        // Cell 0 is backdrop (default background, = the image's anchor) and
+        // shows the image; cell 1 carries an explicit background (as if a panel
+        // or dialog were painted over the image there) and must occlude it.
+        let bg = RGBA8::new(0, 0, 0, 255);
+        let red = RGBA8::new(255, 0, 0, 255);
+        let mut buf = vec![bg; 20 * 10];
+        let image = Image::new(0, 0, 20, 10, vec![red; 20 * 10]);
+        // col 0: space on the default background; col 1: space on an explicit
+        // blue background.
+        let lines = lines_for(" \u{1b}[48;5;21m \u{1b}[0m");
+
+        composite_images(
+            &mut buf,
+            20,
+            10,
+            &[image],
+            &lines,
+            Layout {
+                margin_l: 0.0,
+                margin_t: 0.0,
+                cell_width: 10.0,
+                cell_height: 10.0,
+            },
+        );
+
+        assert_eq!(buf[5 * 20 + 5], red, "backdrop cell should show the image");
+        assert_eq!(
+            buf[5 * 20 + 15],
+            bg,
+            "cell with a foreign background should occlude the image"
+        );
     }
 
     fn render<R: Renderer>(
