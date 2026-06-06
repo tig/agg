@@ -107,8 +107,8 @@ pub(crate) struct Layout {
 /// sixel preview) must occlude it, the way text overwrites sixel pixels in a
 /// real terminal. The snapshot is a final state with no draw-order info, so we
 /// approximate "has content drawn into it" per cell: a cell occludes the image
-/// when it carries a glyph, or when its background differs from the image's
-/// backdrop (the dominant background across the image's footprint). Sixel image
+/// when it carries a glyph, or when its background differs from the shared
+/// backdrop (the dominant background across all images' footprints). Sixel image
 /// views leave their own cells blank (spaces on the backdrop background), so the
 /// image shows through them, while a dialog or panel drawn over the image (its
 /// glyphs and/or its own background) hides it.
@@ -120,13 +120,23 @@ fn composite_images(
     lines: &[avt::Line],
     layout: Layout,
 ) {
+    // The backdrop is the dominant background across every image's footprint.
+    // Sharing one backdrop across all images (rather than sampling each image's
+    // own footprint) keeps occlusion consistent when an app emits several
+    // overlapping sixel tiles for one surface (e.g. winprint's partial preview
+    // re-renders): a tile that happens to sit mostly under a dialog would
+    // otherwise treat the dialog's background as its own and let the image show
+    // through. The combined footprint is dominated by the real backdrop, so the
+    // overlay's cells occlude every tile.
+    let backdrop = shared_backdrop(images, lines, layout);
+
     for image in images {
         let origin_x = (layout.margin_l + image.col as f64 * layout.cell_width).round() as i64;
         let origin_y = (layout.margin_t + image.row as f64 * layout.cell_height).round() as i64;
         let width = image.width();
         let pixels = image.pixels();
 
-        let occlusion = OcclusionMask::build(image, width, lines, layout);
+        let occlusion = OcclusionMask::build(image, width, lines, layout, backdrop);
 
         for iy in 0..image.height() {
             let y = origin_y + iy as i64;
@@ -172,16 +182,20 @@ struct OcclusionMask {
 }
 
 impl OcclusionMask {
-    fn build(image: &Image, width: usize, lines: &[avt::Line], layout: Layout) -> Self {
+    fn build(
+        image: &Image,
+        width: usize,
+        lines: &[avt::Line],
+        layout: Layout,
+        backdrop: Option<avt::Color>,
+    ) -> Self {
         let cols = (width as f64 / layout.cell_width).ceil() as usize;
         let rows = (image.height() as f64 / layout.cell_height).ceil() as usize;
+        let mut cells = vec![false; cols * rows];
 
-        // Gather each footprint cell's background and whether it carries a
-        // glyph. Cells past the end of a line (or a missing line) count as the
-        // default background with no glyph.
-        let mut backgrounds = vec![None; cols * rows];
-        let mut has_glyph = vec![false; cols * rows];
-
+        // A cell occludes the image when it carries a glyph or its background
+        // differs from the shared backdrop. Cells past the end of a line (or a
+        // missing line) count as the default background with no glyph.
         for dr in 0..rows {
             let Some(line) = lines.get(image.row + dr) else {
                 continue;
@@ -190,28 +204,17 @@ impl OcclusionMask {
             let mut col = 0usize;
             for cell in line.cells() {
                 let cell_w = cell.width() as usize;
-                let bg = cell.pen().background();
-                let glyph = cell.char() != ' ';
-                for c in col..col + cell_w {
-                    if c >= image.col && c < image.col + cols {
-                        let idx = dr * cols + (c - image.col);
-                        backgrounds[idx] = bg;
-                        has_glyph[idx] = glyph;
+                let occluded = cell.char() != ' ' || cell.pen().background() != backdrop;
+                if occluded {
+                    for c in col..col + cell_w {
+                        if c >= image.col && c < image.col + cols {
+                            cells[dr * cols + (c - image.col)] = true;
+                        }
                     }
                 }
                 col += cell_w;
             }
         }
-
-        // The backdrop is the dominant background across the footprint. Using
-        // the most common background (rather than a single anchor cell) keeps
-        // the fix working when an overlay covers the image's top-left corner,
-        // as long as the overlay doesn't cover most of the image.
-        let backdrop = dominant_background(&backgrounds);
-
-        let cells = (0..cols * rows)
-            .map(|i| has_glyph[i] || backgrounds[i] != backdrop)
-            .collect();
 
         OcclusionMask { cols, rows, cells }
     }
@@ -221,8 +224,42 @@ impl OcclusionMask {
     }
 }
 
-/// The most frequently occurring background among `backgrounds` (the image's
-/// backdrop), defaulting to the terminal default background.
+/// The dominant background across every image's combined cell footprint, used
+/// as the shared backdrop all images are occluded against.
+fn shared_backdrop(
+    images: &[Image],
+    lines: &[avt::Line],
+    layout: Layout,
+) -> Option<avt::Color> {
+    let mut backgrounds = Vec::new();
+
+    for image in images {
+        let cols = (image.width() as f64 / layout.cell_width).ceil() as usize;
+        let rows = (image.height() as f64 / layout.cell_height).ceil() as usize;
+
+        for dr in 0..rows {
+            let Some(line) = lines.get(image.row + dr) else {
+                continue;
+            };
+
+            let mut col = 0usize;
+            for cell in line.cells() {
+                let cell_w = cell.width() as usize;
+                for c in col..col + cell_w {
+                    if c >= image.col && c < image.col + cols {
+                        backgrounds.push(cell.pen().background());
+                    }
+                }
+                col += cell_w;
+            }
+        }
+    }
+
+    dominant_background(&backgrounds)
+}
+
+/// The most frequently occurring background among `backgrounds` (the backdrop),
+/// defaulting to the terminal default background.
 fn dominant_background(backgrounds: &[Option<avt::Color>]) -> Option<avt::Color> {
     let mut counts: Vec<(Option<avt::Color>, usize)> = Vec::new();
     for bg in backgrounds {
