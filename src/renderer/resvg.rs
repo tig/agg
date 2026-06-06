@@ -412,6 +412,7 @@ impl<'a> Renderer for ResvgRenderer<'a> {
             self.pixel_width,
             self.pixel_height,
             &snapshot.images,
+            &snapshot.lines,
             super::Layout {
                 margin_l: cell_width,
                 margin_t: cell_height / 2.0,
@@ -425,6 +426,14 @@ impl<'a> Renderer for ResvgRenderer<'a> {
 
     fn pixel_size(&self) -> (usize, usize) {
         (self.pixel_width, self.pixel_height)
+    }
+
+    fn cell_size(&self) -> (usize, usize) {
+        let (cols, rows) = self.terminal_size;
+        (
+            (self.pixel_width as f64 / (cols + 2) as f64).round() as usize,
+            (self.pixel_height as f64 / (rows + 1) as f64).round() as usize,
+        )
     }
 }
 

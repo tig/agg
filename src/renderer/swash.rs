@@ -1298,6 +1298,7 @@ impl Renderer for SwashRenderer {
             self.pixel_width,
             self.pixel_height,
             &snapshot.images,
+            &snapshot.lines,
             super::Layout {
                 margin_l,
                 margin_t: margin_t as f64,
@@ -1311,6 +1312,13 @@ impl Renderer for SwashRenderer {
 
     fn pixel_size(&self) -> (usize, usize) {
         (self.pixel_width, self.pixel_height)
+    }
+
+    fn cell_size(&self) -> (usize, usize) {
+        (
+            self.col_width.round() as usize,
+            self.row_height.round() as usize,
+        )
     }
 }
 

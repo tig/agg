@@ -14,15 +14,16 @@ pub struct Terminal {
     vt: Vt,
 }
 
-pub fn build(terminal_size: (usize, usize)) -> Terminal {
-    Terminal::new(terminal_size)
+pub fn build(terminal_size: (usize, usize), cell_size: (usize, usize)) -> Terminal {
+    Terminal::new(terminal_size, cell_size)
 }
 
 impl Terminal {
-    pub fn new(terminal_size: (usize, usize)) -> Self {
+    pub fn new(terminal_size: (usize, usize), cell_size: (usize, usize)) -> Self {
         let vt = Vt::builder()
             .size(terminal_size.0, terminal_size.1)
             .scrollback_limit(0)
+            .cell_size(cell_size.0, cell_size.1)
             .build();
 
         Terminal { vt }
@@ -71,7 +72,7 @@ mod tests {
 
     #[test]
     fn surfaces_a_sixel_image_at_the_cursor() {
-        let mut term = Terminal::new(SIZE);
+        let mut term = Terminal::new(SIZE, (1, 6));
         term.feed_str("ab");
         term.feed_str(RED_SIXEL);
 
@@ -87,7 +88,7 @@ mod tests {
 
     #[test]
     fn clearing_the_display_drops_images() {
-        let mut term = Terminal::new(SIZE);
+        let mut term = Terminal::new(SIZE, (1, 6));
         term.feed_str(RED_SIXEL);
         assert_eq!(term.snapshot().images.len(), 1);
 
